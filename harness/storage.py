@@ -48,3 +48,31 @@ class FilesystemPayloadStore(PayloadStore):
 
     def exists(self, locator: str) -> bool:
         return (self.root / locator).is_file()
+
+
+class ManifestStore(PayloadStore):
+    """Read-only view of a remote store given a listing of its locators (one per
+    line, e.g. from `aws s3 ls --recursive`). Supports existence checks only, so
+    the prev_hash chain and payload retention can be verified without pulling
+    every payload back down."""
+
+    def __init__(self, locators: set[str]):
+        self.locators = locators
+
+    @classmethod
+    def from_listing(cls, path: str | Path, prefix: str = "") -> ManifestStore:
+        out: set[str] = set()
+        for line in Path(path).read_text().splitlines():
+            key = line.split()[-1] if line.strip() else ""
+            if key.startswith(prefix):
+                out.add(key[len(prefix) :])
+        return cls(out)
+
+    def write(self, source_name: str, fetched_at: datetime, data: bytes) -> str:
+        raise NotImplementedError("ManifestStore is read-only")
+
+    def read(self, locator: str) -> bytes:
+        raise NotImplementedError("ManifestStore cannot read payload bytes")
+
+    def exists(self, locator: str) -> bool:
+        return locator in self.locators
