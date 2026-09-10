@@ -82,7 +82,7 @@ def harness(db: Database, store: FilesystemPayloadStore, clock: Clock):  # type:
 
     scripted: dict[str, ScriptedFetch] = {}
 
-    def factory(source: Source, client: HttpClient) -> Adapter:
+    def factory(source: Source, client: HttpClient, now: datetime) -> Adapter:
         if source.name not in scripted:
             cfg = json.loads(source.adapter_config)
             cls: Callable[..., Adapter] = GenericJsonAdapter if source.format == "json" else GenericCsvAdapter

@@ -7,6 +7,7 @@ from __future__ import annotations
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -71,8 +72,19 @@ class HttpClient:
         self._lock = threading.Lock()
 
     # ---- low level -------------------------------------------------------
-    def _request(self, url: str, timeout_s: float | None = None, accept: str = "*/*") -> FetchResult:
-        req = urllib.request.Request(url, headers={"User-Agent": self.user_agent, "Accept": accept})
+    def _request(
+        self,
+        url: str,
+        timeout_s: float | None = None,
+        accept: str = "*/*",
+        form: dict[str, str] | None = None,
+    ) -> FetchResult:
+        headers = {"User-Agent": self.user_agent, "Accept": accept}
+        data = None
+        if form is not None:
+            data = urllib.parse.urlencode(form).encode("ascii")
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        req = urllib.request.Request(url, data=data, headers=headers)
         t0 = time.monotonic()
         try:
             with self._opener.open(req, timeout=timeout_s or self.timeout_s) as resp:
@@ -132,8 +144,18 @@ class HttpClient:
         return RobotsDecision(200, allowed, float(delay), "robots 200 parsed")
 
     # ---- public ----------------------------------------------------------
-    def fetch(self, url: str, timeout_s: float | None = None, accept: str = "*/*") -> FetchResult:
+    def fetch(
+        self,
+        url: str,
+        timeout_s: float | None = None,
+        accept: str = "*/*",
+        form: dict[str, str] | None = None,
+    ) -> FetchResult:
         """Fetch with robots check, per-host serialization, crawl delay, and retries.
+
+        `form` sends an application/x-www-form-urlencoded POST (for publishers
+        whose report endpoint only answers a form submission); robots rules are
+        applied to the URL exactly as for GET.
 
         Raises RobotsUnavailable / RobotsDisallowed / FetchError. HTTP 4xx other
         than 408/429 is returned as a FetchError without retry (401/403 are an
@@ -150,7 +172,7 @@ class HttpClient:
             for attempt in range(1, MAX_ATTEMPTS + 1):
                 self._respect_delay(host, decision.crawl_delay)
                 try:
-                    res = self._request(url, timeout_s=timeout_s, accept=accept)
+                    res = self._request(url, timeout_s=timeout_s, accept=accept, form=form)
                 except (urllib.error.URLError, TimeoutError, OSError) as e:
                     last_exc = FetchError(f"network error: {e}")
                 else:

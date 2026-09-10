@@ -99,6 +99,8 @@ def findings(db: Database) -> str:
         ev = db.key_event_counts(src)
         permanent = len(db.outstanding_removed_keys(src))
         transient = ev.get("reappeared", 0)
+        exited = ev.get("exited", 0)
+        removed_keys = len(db.removed_keys_ever(src))
         drifts = sum(1 for h in db.health_for(src) if h[3])
         outcomes: dict[str, int] = {}
         for s in snaps:
@@ -121,6 +123,12 @@ def findings(db: Database) -> str:
                 annual_loss=mean_removed * 365,
                 drifts=drifts,
                 worst=max((d["classification"] for d in ok_runs), key=_severity, default="n/a"),
+                expected_silent=src.expected_silent,
+                unverified=src.unverified_contrary_claim,
+                exit_target=src.exit_target or "",
+                exited=exited,
+                removed_keys=removed_keys,
+                cadence=src.cadence or "",
             )
         )
     rows.sort(key=lambda r: (-r["permanent"], -r["mean_removed"], -r["mutation_rate"]))
@@ -135,12 +143,42 @@ def findings(db: Database) -> str:
             f" {r['permanent']:>6} {r['transient']:>6} {r['mean_removed']:>8.2f} {r['mutation_rate'] * 100:>6.2f}"
             f" {r['aged']:>6} {r['annual_loss']:>8.0f} {r['drifts']:>5}  {r['worst']}"
             + (f"  [{r['control']}]" if r["control"] else "")
+            + ("  [EXPECTED-SILENT]" if r["expected_silent"] else "")
+            + ("  [UNVERIFIED-CONTRARY-CLAIM]" if r["unverified"] else "")
         )
     out.append("")
-    out.append("perm = removed keys not seen again as of the last run (candidate destruction)")
+    out.append("perm = removed keys not seen again in this source or its exit target (candidate destruction)")
     out.append("trans = removed keys that later reappeared (instability / partial publication)")
     out.append("aged = keys that left a rolling window by creation date; excluded from rem")
     out.append("est/yr = mean removals per day x 365, assuming no archive existed")
+    out.append("drift = runs whose structural fingerprint differed from the prior successful run (adapter fragility)")
+
+    out.append("")
+    out.append("EXIT-CONDITION RESULTS (named; not folded into the ranking)")
+    exits = [r for r in rows if r["exit_target"]]
+    if not exits:
+        out.append("  none configured")
+    for r in exits:
+        rate = (r["exited"] / r["removed_keys"]) if r["removed_keys"] else 0.0
+        out.append(
+            f"  {r['name']}: {r['removed_keys']} distinct removed keys, {r['exited']} found in"
+            f" {r['exit_target']} -> reappearance rate {rate:.1%}; {r['permanent']} unaccounted for"
+        )
+
+    out.append("")
+    out.append("STABILITY (zero removals and zero mutations over the window)")
+    stable = [r for r in rows if r["ok"] >= 2 and r["removed"] == 0 and r["mutation_rate"] == 0.0]
+    measured = [r for r in stable if not r["expected_silent"]]
+    silent = [r for r in stable if r["expected_silent"]]
+    out.append("  measured-stable: " + (", ".join(r["name"] for r in measured) or "none"))
+    out.append(
+        "  expected-silent (cadence longer than the window; no change is NOT evidence of stability): "
+        + (", ".join(f"{r['name']} ({r['cadence'] or 'cadence unstated'})" for r in silent) or "none")
+    )
+    out.append("")
+    out.append("ADAPTER FRAGILITY (structural drifts per source, alongside destruction)")
+    for r in sorted(rows, key=lambda r: (-r["drifts"], r["name"])):
+        out.append(f"  {r['name']:<32} drifts={r['drifts']:<3} worst={r['worst']:<12} perm={r['permanent']}")
     return "\n".join(out)
 
 

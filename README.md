@@ -14,8 +14,13 @@ The harness contains no knowledge of what any record means.
 harness/
   adapter.py            Adapter protocol, FetchResult, Fingerprint, value_hash
   adapters/
-    generic_json.py     config-driven JSON adapter (list of objects at a dotted path)
-    generic_csv.py      config-driven CSV adapter (header row + key columns)
+    base.py             HttpAdapter: url/client/timeout, fetch(), fetch_paged() (pages joined by PAGE_SEP)
+    generic_json.py     config-driven JSON adapter (dotted path, next_url/offset paging, date-prefixed keys)
+    generic_csv.py      config-driven CSV adapter (header or positional columns)
+    html_table.py       HTML <table> parser/adapter (select by attribute, header dedupe)
+    pdf_text.py         PdfTextAdapter: pdftotext -layout, subclass supplies records(text)
+    xml_base.py         XmlAdapter: ElementTree, subclass supplies records(root)
+    sources/            one module per approved source (20); see sources.json
   fetch.py              HttpClient: robots.txt (Amendment A §1.1), crawl-delay,
                         one request per host, 3 attempts w/ exponential backoff,
                         401/403 = endpoint refusal (not retried)
@@ -27,7 +32,19 @@ harness/
   cli.py                python -m harness {init,run,verify,findings,sources}
 deploy/                 systemd timer/service and cron example (daily 06:00 UTC)
 tests/fixtures/         two throwaway fixtures (JSON, CSV) + variants used by tests
+tests/fixtures/sources/ one live capture per approved source (tests/test_source_adapters.py)
+tools/capture_fixture.py  capture a fixture through the configured adapter (optionally with a bounded endpoint)
+sources.json            the 20 approved sources: endpoint templates, adapter config, key,
+                        license basis, timeout, cadence, expected_silent, control group, exit_target
 ```
+
+Endpoint and `adapter_config` strings may contain `{today}`, `{yesterday}`,
+`{prev_business_day}` with optional offsets/formats (`{today-30d}`,
+`{today+365d:%Y}`), resolved at run time. `timeout_s` on a source is forwarded
+to its adapter (default 30 s). `exit_target` names another source whose key
+space is checked for keys removed from this one (`exited` events; reported as a
+named reappearance rate, never as permanent destruction). `expected_silent`
+sources are listed separately from measured-stable ones in the findings.
 
 ## Storage model
 
@@ -40,7 +57,7 @@ All tables are append-only (enforced by `BEFORE UPDATE` / `BEFORE DELETE` trigge
 | `record_index` | (snapshot, record) | `record_key`, `value_hash` only — never values |
 | `run_diffs` | successful run | added / removed / mutated / aged_out / reappeared / unchanged, classification |
 | `source_health` | run | fingerprint text and drift flag |
-| `key_events` | key state change | `removed`, `reappeared`, `aged_out` — powers permanent-vs-transient reporting |
+| `key_events` | key state change | `removed`, `reappeared`, `aged_out`, `exited` — powers permanent-vs-transient and exit-condition reporting |
 | `alerts` | alert | every non-ok outcome, drift, validation failure, consecutive failures |
 
 Outcomes: `ok`, `fetch_failed`, `robots_disallowed`, `extract_failed`, `validation_failed`.
@@ -112,8 +129,11 @@ request per host at a time; 30 s default timeout.
    `fetch()`, `extract(raw) -> list[(key, value_hash)]`, and
    `fingerprint(raw) -> Fingerprint`, and point `adapter_module` at it as
    `package.module:ClassName`. Reuse `harness.adapter.value_hash` and
-   `compose_key`. Ship a captured fixture under `tests/fixtures/` and a test
-   asserting the expected extraction.
+   `compose_key`, or subclass `HttpAdapter`/`PdfTextAdapter`/`XmlAdapter`/
+   `HtmlTableAdapter` as the modules in `harness/adapters/sources/` do. Capture
+   a fixture with `python -m tools.capture_fixture sources.json <name> tests/fixtures/sources/<file> [bounded-endpoint]`
+   and add an `Expect(...)` row to `tests/test_source_adapters.py` (constructed
+   through `default_adapter_factory` with a network-refusing client).
 
 3. `python -m harness init --sources sources.json` — a new `sources` row is
    appended; nothing is edited.

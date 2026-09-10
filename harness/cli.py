@@ -5,6 +5,8 @@ python -m harness run       --db DB --payloads DIR [--only NAME]  one scheduled 
 python -m harness verify    --db DB --payloads DIR             prev_hash chain + payload check
 python -m harness findings  --db DB                            ranking report
 python -m harness sources   --db DB
+python -m harness accept-drift --db DB --source NAME [--note TEXT]
+                            accept the latest observed fingerprint as the new expected shape
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 from harness.db import Database
 from harness.report import findings, run_summary, source_table, verify_integrity
@@ -32,8 +35,31 @@ SOURCE_FIELDS = {
     "window_days",
     "window_key_part",
     "control_group",
+    "timeout_s",
+    "cadence",
+    "expected_silent",
+    "unverified_contrary_claim",
+    "exit_target",
     "active",
 }
+
+
+def load_source_entries(path: Path) -> list[dict[str, Any]]:
+    """Read and normalize a sources.json file into add_source() keyword sets."""
+    out: list[dict[str, Any]] = []
+    for entry in json.loads(path.read_text()):
+        unknown = set(entry) - SOURCE_FIELDS
+        if unknown:
+            raise SystemExit(f"source {entry.get('name')!r}: unknown fields {sorted(unknown)}")
+        entry = dict(entry)
+        entry["adapter_config"] = json.dumps(entry.get("adapter_config", {}), sort_keys=True)
+        entry.setdefault("active", True)
+        entry.setdefault("expected_silent", False)
+        entry.setdefault("unverified_contrary_claim", False)
+        for k in ("window_days", "window_key_part", "control_group", "timeout_s", "cadence", "exit_target"):
+            entry.setdefault(k, None)
+        out.append(entry)
+    return out
 
 
 def load_sources(db: Database, path: Path) -> list[str]:
@@ -42,13 +68,7 @@ def load_sources(db: Database, path: Path) -> list[str]:
     Append-only: a changed or deactivated source is a new row, never an edit.
     """
     changed = []
-    for entry in json.loads(path.read_text()):
-        unknown = set(entry) - SOURCE_FIELDS
-        if unknown:
-            raise SystemExit(f"source {entry.get('name')!r}: unknown fields {sorted(unknown)}")
-        entry = dict(entry)
-        entry["adapter_config"] = json.dumps(entry.get("adapter_config", {}), sort_keys=True)
-        entry.setdefault("active", True)
+    for entry in load_source_entries(path):
         cur = db.source_by_name(entry["name"])
         if cur is not None and all(getattr(cur, k) == v for k, v in entry.items()):
             continue
@@ -71,6 +91,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("verify")
     sub.add_parser("findings")
     sub.add_parser("sources")
+    s_acc = sub.add_parser("accept-drift")
+    s_acc.add_argument("--source", required=True)
+    s_acc.add_argument("--note", default=None)
     a = p.parse_args(argv)
 
     logging.basicConfig(
@@ -95,6 +118,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if rep.ok else 1
     if a.cmd == "findings":
         print(findings(db))
+        return 0
+    if a.cmd == "accept-drift":
+        src = db.source_by_name(a.source)
+        if src is None:
+            print(f"unknown source {a.source!r}", file=sys.stderr)
+            return 1
+        hist = db.health_for(src)
+        if not hist:
+            print("no observed fingerprint to accept", file=sys.stderr)
+            return 1
+        db.accept_drift(src, hist[-1][1], a.note)
+        print(f"accepted fingerprint from snapshot {hist[-1][0]} for {src.name}: {hist[-1][1]}")
         return 0
     if a.cmd == "run":
         sources = db.sources()

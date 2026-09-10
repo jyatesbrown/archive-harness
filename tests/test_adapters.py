@@ -18,7 +18,7 @@ def test_json_extract_and_fingerprint():
     fp = a.fingerprint(raw)
     assert fp.record_count == 5
     assert fp.field_names == ("color", "created", "id", "qty")
-    assert fp.selectors == ("json:data.items", "key:id")
+    assert fp.selectors == ("json:data.items", "key:id", "pages:none")
 
 
 def test_json_value_hash_ignores_key_and_ignored_fields():
@@ -62,7 +62,7 @@ def test_csv_errors():
         a.extract(b"a,b\n1,2\n")
     with pytest.raises(ExtractionError, match="duplicate"):
         a.extract(b"date,series,value\n1,X,1\n1,X,2\n")
-    with pytest.raises(ExtractionError, match="column count"):
+    with pytest.raises(ExtractionError, match="columns, expected"):
         a.extract(b"date,series,value\n1,X\n")
 
 

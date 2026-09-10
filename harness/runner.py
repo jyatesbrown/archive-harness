@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from typing import Any
 
 from harness.adapter import Adapter, ExtractionError, Fingerprint, load_adapter
 from harness.db import Database, Snapshot, Source, utcnow
@@ -26,12 +28,54 @@ log = logging.getLogger("harness")
 COUNT_DEVIATION_LIMIT = 0.40
 CONSECUTIVE_FAILURE_ALERT = 2
 
-AdapterFactory = Callable[[Source, HttpClient], Adapter]
+AdapterFactory = Callable[[Source, HttpClient, datetime], Adapter]
+
+_TEMPLATE = re.compile(r"\{(today|yesterday|prev_business_day)(?:([+-])(\d+)d)?(?::([^}]+))?\}")
 
 
-def default_adapter_factory(source: Source, client: HttpClient) -> Adapter:
-    cfg = json.loads(source.adapter_config or "{}")
-    return load_adapter(source.adapter_module, url=source.endpoint, client=client, **cfg)
+def prev_business_day(d: date) -> date:
+    d -= timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def resolve_endpoint(template: str, now: datetime) -> str:
+    """Expand date tokens: {today}, {yesterday}, {prev_business_day}, each with an
+    optional day offset and strftime format, e.g. {today-30d:%Y-%m-%d}.
+    Default format is ISO date."""
+    base = {
+        "today": now.date(),
+        "yesterday": now.date() - timedelta(days=1),
+        "prev_business_day": prev_business_day(now.date()),
+    }
+
+    def sub(m: re.Match[str]) -> str:
+        d = base[m.group(1)]
+        if m.group(2):
+            off = int(m.group(3))
+            d = d + timedelta(days=off) if m.group(2) == "+" else d - timedelta(days=off)
+        return d.strftime(m.group(4) or "%Y-%m-%d")
+
+    return _TEMPLATE.sub(sub, template)
+
+
+def resolve_config(value: Any, now: datetime) -> Any:
+    """Apply resolve_endpoint() to every string inside an adapter_config value."""
+    if isinstance(value, str):
+        return resolve_endpoint(value, now)
+    if isinstance(value, dict):
+        return {k: resolve_config(v, now) for k, v in value.items()}
+    if isinstance(value, list):
+        return [resolve_config(v, now) for v in value]
+    return value
+
+
+def default_adapter_factory(source: Source, client: HttpClient, now: datetime) -> Adapter:
+    cfg = resolve_config(json.loads(source.adapter_config or "{}"), now)
+    if source.timeout_s is not None:
+        cfg.setdefault("timeout_s", source.timeout_s)
+    return load_adapter(source.adapter_module, url=resolve_endpoint(source.endpoint, now), client=client, **cfg)
 
 
 @dataclass
@@ -43,6 +87,7 @@ class SourceResult:
     record_count: int | None = None
     drifted: bool = False
     diff: DiffResult | None = None
+    exited: int = 0
     duration_s: float = 0.0
     alerts: list[str] = field(default_factory=list)
 
@@ -149,11 +194,11 @@ class Runner:
             self._alert(res, "consecutive_failures", f"{CONSECUTIVE_FAILURE_ALERT} consecutive non-ok runs: {recent}")
 
     def run_source(self, source: Source) -> SourceResult:
-        adapter = self.adapter_factory(source, self.client)
+        fetched_at = self.now()
+        adapter = self.adapter_factory(source, self.client, fetched_at)
         version = getattr(adapter, "version", "unknown")
         prev_any: Snapshot | None = self.db.last_snapshot(source)
         prev_hash = prev_any.content_hash if prev_any else None
-        fetched_at = self.now()
 
         # ---- fetch -----------------------------------------------------
         try:
@@ -232,11 +277,14 @@ class Runner:
                 prev_fp = parse_fingerprint(hist[-1][1])
         ddetail = drift_detail(prev_fp, fp)
         drifted = ddetail is not None
+        accepted = drifted and any(
+            parse_fingerprint(a).structure() == fp.structure() for a in self.db.accepted_fingerprints(source)
+        )
 
         try:
             if prev_count and not pairs:
                 validate_count(prev_count, 0)
-            if drifted:
+            if drifted and not accepted:
                 raise ValidationFailed(f"structural drift: {ddetail}")
             validate_count(prev_count, len(pairs))
         except ValidationFailed as e:
@@ -273,7 +321,10 @@ class Runner:
             fr.duration_s,
         )
         self.db.add_records(sid, pairs)
-        self.db.add_health(source.id, sid, fp.as_text(), fp.record_count, False, None)
+        self.db.add_health(source.id, sid, fp.as_text(), fp.record_count, drifted, ddetail)
+        res = SourceResult(source, sid, "ok", "", len(pairs), drifted)
+        if drifted:
+            self._alert(res, "drift_accepted", f"structural drift matched an accepted fingerprint: {ddetail}")
 
         window = None
         if source.window_days is not None and source.window_key_part is not None:
@@ -301,4 +352,26 @@ class Runner:
         self.db.add_key_events(source.id, sid, "removed", sorted(d.removed))
         self.db.add_key_events(source.id, sid, "reappeared", sorted(d.reappeared))
         self.db.add_key_events(source.id, sid, "aged_out", sorted(d.aged_out))
-        return SourceResult(source, sid, "ok", "", len(pairs), False, d)
+        res.diff = d
+        if source.exit_target:
+            res.exited = self._check_exit_condition(source, sid, d)
+        return res
+
+    def _check_exit_condition(self, source: Source, sid: int, d: DiffResult) -> int:
+        """Keys removed from this source are checked against the exit_target's
+        latest successful key space; matches are recorded as 'exited' rather
+        than left outstanding as candidate destruction."""
+        target = self.db.source_by_name(source.exit_target or "")
+        if target is None:
+            self._alert(
+                SourceResult(source, sid, "ok"), "exit_target_missing", f"exit_target {source.exit_target!r} not found"
+            )
+            return 0
+        target_ok = self.db.last_ok_snapshot(target)
+        if target_ok is None:
+            return 0
+        target_keys = self.db.keys_in_snapshot(target_ok.id)
+        candidates = d.removed | self.db.outstanding_removed_keys(source)
+        exited = sorted(k for k in candidates if k in target_keys)
+        self.db.add_key_events(source.id, sid, "exited", exited)
+        return len(exited)
