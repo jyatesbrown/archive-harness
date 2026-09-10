@@ -14,7 +14,7 @@ class FakeTransport:
         self.responses = responses
         self.calls: list[str] = []
 
-    def __call__(self, url: str, timeout_s=None, accept="*/*") -> FetchResult:  # type: ignore[no-untyped-def]
+    def __call__(self, url: str, timeout_s=None, accept="*/*", form=None) -> FetchResult:  # type: ignore[no-untyped-def]
         self.calls.append(url)
         q = self.responses[url]
         item = q.pop(0) if len(q) > 1 else q[0]

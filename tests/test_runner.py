@@ -17,7 +17,7 @@ def _ok_snaps(db, src):
 def test_json_baseline_then_diff(harness):
     runner, scripted, db, store, clock = harness
     src = add_json_source(db)
-    runner.adapter_factory(src, runner.client)
+    runner.adapter_factory(src, runner.client, clock.now())
     scripted[src.name].push(fixture_bytes("records_v1.json"))
     scripted[src.name].push(fixture_bytes("records_v2.json"))
 
@@ -55,7 +55,7 @@ def test_json_baseline_then_diff(harness):
 def test_csv_composite_key_and_mutation(harness):
     runner, scripted, db, store, clock = harness
     src = add_csv_source(db)
-    runner.adapter_factory(src, runner.client)
+    runner.adapter_factory(src, runner.client, clock.now())
     scripted[src.name].push(fixture_bytes("table_v1.csv"))
     scripted[src.name].push(fixture_bytes("table_v2.csv"))
     runner.run()
@@ -73,7 +73,7 @@ def test_csv_rolling_window_ageout_not_destruction(harness):
     runner, scripted, db, store, clock = harness
     clock.t = clock.t.replace(day=1)  # 2026-09-01 -> floor 2026-08-28... use explicit dates below
     src = add_csv_source(db, window_days=4, window_key_part=0)
-    runner.adapter_factory(src, runner.client)
+    runner.adapter_factory(src, runner.client, clock.now())
     scripted[src.name].push(fixture_bytes("table_v1.csv"))
     scripted[src.name].push(fixture_bytes("table_v2.csv"))
     from datetime import datetime, timezone
@@ -94,7 +94,7 @@ def test_csv_rolling_window_ageout_not_destruction(harness):
 def test_transient_vs_permanent_removal(harness):
     runner, scripted, db, store, clock = harness
     src = add_json_source(db)
-    runner.adapter_factory(src, runner.client)
+    runner.adapter_factory(src, runner.client, clock.now())
     v1, v2 = fixture_bytes("records_v1.json"), fixture_bytes("records_v2.json")
     for body in (v1, v2, v1):  # A-002 vanishes in v2, returns in v1; A-006 vanishes and stays gone
         scripted[src.name].push(body)
@@ -116,7 +116,7 @@ def test_transient_vs_permanent_removal(harness):
 def test_drift_rejects_extraction_and_alerts(harness):
     runner, scripted, db, store, clock = harness
     src = add_json_source(db)
-    runner.adapter_factory(src, runner.client)
+    runner.adapter_factory(src, runner.client, clock.now())
     scripted[src.name].push(fixture_bytes("records_v1.json"))
     scripted[src.name].push(fixture_bytes("records_v3_drift.json"))
     runner.run()
@@ -140,7 +140,7 @@ def test_drift_rejects_extraction_and_alerts(harness):
 def test_count_deviation_and_zero_records(harness):
     runner, scripted, db, store, clock = harness
     src = add_json_source(db)
-    runner.adapter_factory(src, runner.client)
+    runner.adapter_factory(src, runner.client, clock.now())
     doc = json.loads(fixture_bytes("records_v1.json"))
     scripted[src.name].push(fixture_bytes("records_v1.json"))
     doc["data"]["items"] = doc["data"]["items"][:2]  # 5 -> 2 = 60% drop
@@ -172,7 +172,7 @@ def test_fetch_failures_are_recorded_and_isolated(harness):
     d = add_json_source(db, name="d")
     e = add_json_source(db, name="e")
     for s in (a, b, c, d, e):
-        runner.adapter_factory(s, runner.client)
+        runner.adapter_factory(s, runner.client, clock.now())
     scripted["a"].push(FetchError("HTTP 403", 403, b"forbidden"))
     scripted["b"].push(fixture_bytes("table_v1.csv"))
     scripted["c"].push(RobotsDisallowed("robots 200 parsed"))
@@ -197,7 +197,7 @@ def test_fetch_failures_are_recorded_and_isolated(harness):
 def test_extract_failure_retains_payload_and_indexes_nothing(harness):
     runner, scripted, db, store, clock = harness
     src = add_json_source(db)
-    runner.adapter_factory(src, runner.client)
+    runner.adapter_factory(src, runner.client, clock.now())
     scripted[src.name].push(b"<html>maintenance</html>")
     res = runner.run().results[0]
     assert res.outcome == "extract_failed"
@@ -216,3 +216,78 @@ def test_scripted_adapter_raises_extraction_error_type():
         pass
     else:  # pragma: no cover
         raise AssertionError
+
+
+def _items(*ids: str) -> bytes:
+    return json.dumps(
+        {"data": {"items": [{"id": i, "created": "2026-09-01", "color": "x", "qty": 1} for i in ids]}}
+    ).encode()
+
+
+def test_exit_condition_removals_are_checked_against_target(harness):
+    """Amendment B §3/§6: keys leaving Public Inspection are looked up in the
+    Documents API key space; hits are 'exited', misses stay outstanding."""
+    runner, scripted, db, store, clock = harness
+    docs = add_json_source(db, "docs")
+    queue = add_json_source(db, "queue", exit_target="docs", control_group="EXIT-CONDITION")
+    for s in (docs, queue):
+        runner.adapter_factory(s, runner.client, clock.now())
+    filler = [f"D-{i}" for i in range(10)]
+    stay = [f"P{i}" for i in range(3, 10)]
+    # day 1: queue holds P1..P9, docs has nothing relevant
+    scripted["docs"].push(_items(*filler))
+    scripted["queue"].push(_items("P1", "P2", *stay))
+    runner.run()
+    clock.advance()
+    # day 2: P1 and P2 leave the queue; P1 is published in docs, P2 is not
+    scripted["docs"].push(_items(*filler, "P1"))
+    scripted["queue"].push(_items(*stay))
+    runner.run()
+    clock.advance()
+    ev = db.key_event_counts(queue)
+    assert ev["removed"] == 2 and ev["exited"] == 1
+    assert db.outstanding_removed_keys(queue) == {"P2"}
+    assert db.run_diffs_for(queue)[-1]["classification"] == "destructive"
+    # day 3: P2 shows up in docs on a later run -> exited then, not permanent
+    scripted["docs"].push(_items(*filler, "P1", "P2"))
+    scripted["queue"].push(_items(*stay))
+    runner.run()
+    assert db.key_event_counts(queue)["exited"] == 2
+    assert db.outstanding_removed_keys(queue) == set()
+    text = findings(db)
+    assert "EXIT-CONDITION RESULTS" in text
+    line = next(line for line in text.splitlines() if line.strip().startswith("queue:"))
+    assert "2 distinct removed keys, 2 found in docs -> reappearance rate 100.0%; 0 unaccounted for" in line
+    row = next(line for line in text.splitlines() if " queue " in line)
+    cols = row.split()
+    assert cols[7] == "0", "exited keys must not count as permanent destruction"
+
+
+def test_exit_target_missing_alerts_instead_of_crashing(harness):
+    runner, scripted, db, store, clock = harness
+    q = add_json_source(db, "queue", exit_target="nope")
+    runner.adapter_factory(q, runner.client, clock.now())
+    scripted["queue"].push(_items("P1", "P2", "P3", "P4"))
+    runner.run()
+    clock.advance()
+    scripted["queue"].push(_items("P1", "P2", "P3"))
+    runner.run()
+    assert any(a[3] == "exit_target_missing" for a in db.alerts_since(0))
+
+
+def test_expected_silent_reported_separately(harness):
+    runner, scripted, db, store, clock = harness
+    quiet = add_json_source(db, "quiet", expected_silent=True, cadence="quarterly (inferred)")
+    loud = add_json_source(db, "steady")
+    for s in (quiet, loud):
+        runner.adapter_factory(s, runner.client, clock.now())
+    for _ in range(3):
+        scripted["quiet"].push(_items("Q1", "Q2"))
+        scripted["steady"].push(_items("S1", "S2"))
+        runner.run()
+        clock.advance()
+    text = findings(db)
+    measured = next(line for line in text.splitlines() if "measured-stable:" in line)
+    silent = next(line for line in text.splitlines() if "expected-silent" in line and "quiet" in line)
+    assert "steady" in measured and "quiet" not in measured
+    assert "quiet" in silent

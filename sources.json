@@ -1,0 +1,246 @@
+[
+  {
+    "name": "treasury_par_yield_csv",
+    "tier": "A",
+    "endpoint": "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/{today:%Y}/all?type=daily_treasury_yield_curve&field_tdr_date_value={today:%Y}&page&_format=csv",
+    "format": "csv",
+    "adapter_module": "harness.adapters.sources.treasury_yield_csv:TreasuryYieldCsv",
+    "identity_key": "Date",
+    "license_url": "17 U.S.C. 105 (https://www.law.cornell.edu/uscode/text/17/105); no agency reuse statement located",
+    "control_group": "FORMAT-CONTROL",
+    "cadence": "daily (business days); publisher: Daily Treasury Par Yield Curve Rates",
+    "timeout_s": 90
+  },
+  {
+    "name": "treasury_par_yield_html",
+    "tier": "A",
+    "endpoint": "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/TextView?type=daily_treasury_yield_curve&field_tdr_date_value={today:%Y}",
+    "format": "html",
+    "adapter_module": "harness.adapters.sources.treasury_yield_html:TreasuryYieldHtml",
+    "identity_key": "Date",
+    "license_url": "17 U.S.C. 105 (https://www.law.cornell.edu/uscode/text/17/105); no agency reuse statement located",
+    "control_group": "FORMAT-CONTROL",
+    "cadence": "daily (business days); publisher: Daily Treasury Par Yield Curve Rates",
+    "timeout_s": 90
+  },
+  {
+    "name": "dol_ui_weekly_claims_pdf",
+    "tier": "A",
+    "endpoint": "https://www.dol.gov/ui/data.pdf",
+    "format": "pdf",
+    "adapter_module": "harness.adapters.sources.dol_ui_claims_pdf:DolUiClaimsPdf",
+    "identity_key": "sa_weekly|<week ending>; national|<label>|<week ending>; state|<state>|<measure>|<week ending>",
+    "license_url": "https://www.dol.gov/general/aboutdol/copyright",
+    "cadence": "weekly (Thursday 8:30 ET); publisher: news release schedule"
+  },
+  {
+    "name": "dol_eta_weekly_claims_html",
+    "tier": "A",
+    "endpoint": "https://oui.doleta.gov/unemploy/wkclaims/report.asp",
+    "format": "html",
+    "adapter_module": "harness.adapters.sources.dol_eta_weekly_claims_html:DolEtaWeeklyClaimsHtml",
+    "adapter_config": {
+      "form": {
+        "level": "us",
+        "final_yr": "{today+365d:%Y}",
+        "strtdate": "{today-365d:%Y}",
+        "enddate": "{today:%Y}",
+        "filetype": "html",
+        "submit": "Submit"
+      }
+    },
+    "identity_key": "Week Ended (MM/DD/YYYY)",
+    "license_url": "https://www.dol.gov/general/aboutdol/copyright",
+    "cadence": "weekly (Thursday); publisher: r539cy report updated with each release"
+  },
+  {
+    "name": "eia_gasdiesel_html",
+    "tier": "A",
+    "endpoint": "https://www.eia.gov/petroleum/gasdiesel/",
+    "format": "html",
+    "adapter_module": "harness.adapters.sources.eia_gasdiesel_html:EiaGasDieselHtml",
+    "identity_key": "<table caption>|<region or state>|<week ending MM/DD/YY>",
+    "license_url": "https://www.eia.gov/about/copyrights_reuse.php",
+    "cadence": "weekly (Monday 17:00 ET); publisher: Gasoline and Diesel Fuel Update release schedule"
+  },
+  {
+    "name": "fr_documents_json",
+    "tier": "A",
+    "endpoint": "https://www.federalregister.gov/api/v1/documents.json?per_page=1000&order=newest&conditions[publication_date][gte]={today-30d}",
+    "format": "json",
+    "adapter_module": "harness.adapters.sources.fr_documents_json:FrDocumentsJson",
+    "identity_key": "document_number",
+    "license_url": "https://www.govinfo.gov/about/policies",
+    "control_group": "EXIT-CONDITION-TARGET",
+    "cadence": "daily (business days); publisher: Federal Register publication schedule",
+    "timeout_s": 30
+  },
+  {
+    "name": "fr_issue_pdf",
+    "tier": "A",
+    "endpoint": "https://www.govinfo.gov/content/pkg/FR-{prev_business_day}/pdf/FR-{prev_business_day}.pdf",
+    "format": "pdf",
+    "adapter_module": "harness.adapters.sources.fr_issue_pdf:FrIssuePdf",
+    "identity_key": "<issue date>|<FR Doc number>",
+    "license_url": "https://www.govinfo.gov/about/policies",
+    "window_days": 1,
+    "window_key_part": 0,
+    "cadence": "daily (business days); publisher: Federal Register publication schedule"
+  },
+  {
+    "name": "cdc_nndss_weekly_json",
+    "tier": "A",
+    "endpoint": "https://data.cdc.gov/resource/x9gk-5huc.json?$where=year='{today:%Y}'&$limit=500000",
+    "format": "json",
+    "adapter_module": "harness.adapters.sources.cdc_nndss_json:CdcNndssJson",
+    "identity_key": "states|year|week|label",
+    "license_url": "https://www.cdc.gov/other/agencymaterials.html",
+    "cadence": "weekly; publisher metadata: Update Frequency Weekly",
+    "timeout_s": 120
+  },
+  {
+    "name": "cms_hospital_general_info_json",
+    "tier": "A",
+    "endpoint": "https://data.cms.gov/provider-data/api/1/datastore/query/xubh-q36u/0?limit=1500&offset=0",
+    "format": "json",
+    "adapter_module": "harness.adapters.sources.cms_hospital_info_json:CmsHospitalInfoJson",
+    "identity_key": "facility_id",
+    "license_url": "17 U.S.C. 105 (https://www.law.cornell.edu/uscode/text/17/105); no agency reuse statement located; dataset metadata has no license field",
+    "cadence": "inferred quarterly from release dates; no publisher cadence statement located",
+    "expected_silent": true
+  },
+  {
+    "name": "fdic_failed_bank_list_html",
+    "tier": "A",
+    "endpoint": "https://www.fdic.gov/bank-failures/failed-bank-list?items_per_page=100&page=0",
+    "format": "html",
+    "adapter_module": "harness.adapters.sources.fdic_failed_banks_html:FdicFailedBanksHtml",
+    "identity_key": "Cert",
+    "license_url": "17 U.S.C. 105 (https://www.law.cornell.edu/uscode/text/17/105); no agency reuse statement located; flagged for counsel (F6)",
+    "control_group": "APPEND-ONLY-CONTROL",
+    "cadence": "as bank failures occur; expected static over 21 days",
+    "expected_silent": true
+  },
+  {
+    "name": "ofac_recent_actions_html",
+    "tier": "A",
+    "endpoint": "https://ofac.treasury.gov/recent-actions",
+    "format": "html",
+    "adapter_module": "harness.adapters.sources.ofac_recent_actions_html:OfacRecentActionsHtml",
+    "adapter_config": {
+      "window_days": 30,
+      "today": "{today}"
+    },
+    "identity_key": "<action date>|<path>",
+    "license_url": "17 U.S.C. 105 (https://www.law.cornell.edu/uscode/text/17/105); no agency reuse statement located",
+    "window_days": 30,
+    "window_key_part": 0,
+    "cadence": "as actions occur (several per week)",
+    "timeout_s": 60
+  },
+  {
+    "name": "ofac_sdn_csv",
+    "tier": "A",
+    "endpoint": "https://www.treasury.gov/ofac/downloads/sdn.csv",
+    "format": "csv",
+    "adapter_module": "harness.adapters.sources.ofac_sdn_csv:OfacSdnCsv",
+    "identity_key": "ent_num (column 1, no header row)",
+    "license_url": "17 U.S.C. 105 (https://www.law.cornell.edu/uscode/text/17/105); no agency reuse statement located",
+    "cadence": "as actions occur (several per week)",
+    "timeout_s": 60
+  },
+  {
+    "name": "fr_public_inspection_json",
+    "tier": "A",
+    "endpoint": "https://www.federalregister.gov/api/v1/public-inspection-documents/current.json",
+    "format": "json",
+    "adapter_module": "harness.adapters.sources.fr_public_inspection_json:FrPublicInspectionJson",
+    "identity_key": "document_number",
+    "license_url": "https://www.govinfo.gov/about/policies",
+    "control_group": "EXIT-CONDITION",
+    "exit_target": "fr_documents_json",
+    "cadence": "daily (business days); documents leave on publication"
+  },
+  {
+    "name": "faa_nas_status_xml",
+    "tier": "A",
+    "endpoint": "https://nasstatus.faa.gov/api/airport-status-information",
+    "format": "xml",
+    "adapter_module": "harness.adapters.sources.faa_nas_status_xml:FaaNasStatusXml",
+    "identity_key": "<Delay_type Name>|<ARPT>",
+    "license_url": "17 U.S.C. 105 (https://www.law.cornell.edu/uscode/text/17/105); no agency reuse statement located",
+    "cadence": "continuous; harness samples daily"
+  },
+  {
+    "name": "fiscaldata_dts_operating_cash_json",
+    "tier": "A",
+    "endpoint": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/dts/operating_cash_balance?page[size]=10000&page[number]=1",
+    "format": "json",
+    "adapter_module": "harness.adapters.sources.fiscaldata_dts_json:FiscalDataDtsJson",
+    "identity_key": "record_date|account_type",
+    "license_url": "https://fiscaldata.treasury.gov/about-us/",
+    "cadence": "daily (business days); publisher: Released Daily"
+  },
+  {
+    "name": "usgs_earthquakes_all_day_json",
+    "tier": "A",
+    "endpoint": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson",
+    "format": "json",
+    "adapter_module": "harness.adapters.sources.usgs_quakes_json:UsgsQuakesJson",
+    "identity_key": "<UTC date of properties.time>|id",
+    "license_url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits",
+    "window_days": 1,
+    "window_key_part": 0,
+    "control_group": "ROLLING-WINDOW",
+    "cadence": "feed regenerated every minute; 24-hour window"
+  },
+  {
+    "name": "cisa_kev_json",
+    "tier": "A",
+    "endpoint": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+    "format": "json",
+    "adapter_module": "harness.adapters.sources.cisa_kev_json:CisaKevJson",
+    "identity_key": "cveID",
+    "license_url": "17 U.S.C. 105 (https://www.law.cornell.edu/uscode/text/17/105); no agency reuse statement located; cisa.gov policy pages 403 to declared UA (unverified)",
+    "unverified_contrary_claim": true,
+    "cadence": "as vulnerabilities are added (several per week)"
+  },
+  {
+    "name": "austin_311_json",
+    "tier": "B",
+    "endpoint": "https://data.austintexas.gov/resource/xwdj-i9he.json?$where=sr_created_date>'{today-30d}T00:00:00'&$limit=200000&$order=sr_number",
+    "format": "json",
+    "adapter_module": "harness.adapters.sources.austin_311_json:Austin311Json",
+    "identity_key": "<date of sr_created_date>|sr_number",
+    "license_url": "https://data.austintexas.gov/api/views/xwdj-i9he.json (license: Public Domain)",
+    "window_days": 30,
+    "window_key_part": 0,
+    "control_group": "ROLLING-WINDOW",
+    "cadence": "daily; publisher metadata: Update Frequency Daily"
+  },
+  {
+    "name": "seattle_building_permits_csv",
+    "tier": "B",
+    "endpoint": "https://data.seattle.gov/resource/76t5-zqzr.csv?$limit=300000",
+    "format": "csv",
+    "adapter_module": "harness.adapters.sources.seattle_permits_csv:SeattlePermitsCsv",
+    "identity_key": "permitnum",
+    "license_url": "https://data.seattle.gov/api/views/76t5-zqzr.json (license: Public Domain)",
+    "cadence": "daily; publisher metadata: Update Frequency Daily",
+    "timeout_s": 90
+  },
+  {
+    "name": "la_311_cases_2026_json",
+    "tier": "B",
+    "endpoint": "https://data.lacity.org/resource/2cy6-i7zn.json?$where=createddate>'{today-7d}T00:00:00'&$limit=200000&$order=casenumber",
+    "format": "json",
+    "adapter_module": "harness.adapters.sources.la_311_json:La311Json",
+    "identity_key": "<date of createddate>|casenumber",
+    "license_url": "https://data.lacity.org/api/views/2cy6-i7zn.json (license: CC0 1.0)",
+    "window_days": 7,
+    "window_key_part": 0,
+    "control_group": "ROLLING-WINDOW",
+    "cadence": "daily; publisher metadata: Update Frequency Daily",
+    "timeout_s": 120
+  }
+]

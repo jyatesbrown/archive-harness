@@ -14,6 +14,7 @@ def test_every_table_rejects_update_and_delete(db: Database):
     db.add_health(src.id, sid, '{"count":1,"fields":[],"selectors":[]}', 1, False, None)
     db.add_key_events(src.id, sid, "removed", ["k"])
     db.add_alert("x", "y", src.id, sid)
+    db.accept_drift(src, '{"count":1,"fields":[],"selectors":[]}')
     for t in TABLES:
         assert db.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] >= 1, t
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):

@@ -18,6 +18,7 @@ TABLES = (
     "source_health",
     "key_events",
     "alerts",
+    "drift_acceptances",
 )
 
 SCHEMA = """
@@ -34,6 +35,11 @@ CREATE TABLE IF NOT EXISTS sources (
     window_days     INTEGER,
     window_key_part INTEGER,
     control_group   TEXT,
+    timeout_s       REAL,
+    cadence         TEXT,
+    expected_silent INTEGER NOT NULL DEFAULT 0,
+    unverified_contrary_claim INTEGER NOT NULL DEFAULT 0,
+    exit_target     TEXT,
     active          INTEGER NOT NULL DEFAULT 1,
     added_at        TEXT NOT NULL
 );
@@ -89,13 +95,14 @@ CREATE TABLE IF NOT EXISTS source_health (
 
 -- Lifecycle of keys that leave the record set. 'removed' when a key vanishes,
 -- 'reappeared' when a previously removed key returns, 'aged_out' when a key
--- leaves a rolling window by creation date (not destruction).
+-- leaves a rolling window by creation date (not destruction), 'exited' when a
+-- removed key is found in the key space of the source's exit_target.
 CREATE TABLE IF NOT EXISTS key_events (
     id              INTEGER PRIMARY KEY,
     source_id       INTEGER NOT NULL REFERENCES sources(id),
     snapshot_id     INTEGER NOT NULL REFERENCES snapshots(id),
     record_key      TEXT NOT NULL,
-    event           TEXT NOT NULL CHECK (event IN ('removed','reappeared','aged_out'))
+    event           TEXT NOT NULL CHECK (event IN ('removed','reappeared','aged_out','exited'))
 );
 CREATE INDEX IF NOT EXISTS key_events_idx ON key_events(source_id, record_key, id);
 
@@ -106,6 +113,17 @@ CREATE TABLE IF NOT EXISTS alerts (
     snapshot_id     INTEGER REFERENCES snapshots(id),
     kind            TEXT NOT NULL,
     message         TEXT NOT NULL
+);
+
+-- Operator acknowledgement that a structural fingerprint is the new expected
+-- shape. Runs matching an accepted fingerprint are not rejected for drift;
+-- the drift itself is still recorded in source_health.
+CREATE TABLE IF NOT EXISTS drift_acceptances (
+    id              INTEGER PRIMARY KEY,
+    source_id       INTEGER NOT NULL REFERENCES sources(id),
+    fingerprint     TEXT NOT NULL,
+    accepted_at     TEXT NOT NULL,
+    note            TEXT
 );
 """
 
@@ -143,6 +161,11 @@ class Source:
     window_days: int | None
     window_key_part: int | None
     control_group: str | None
+    timeout_s: float | None
+    cadence: str | None
+    expected_silent: bool
+    unverified_contrary_claim: bool
+    exit_target: str | None
     active: bool
 
 
@@ -188,12 +211,18 @@ class Database:
         window_days: int | None = None,
         window_key_part: int | None = None,
         control_group: str | None = None,
+        timeout_s: float | None = None,
+        cadence: str | None = None,
+        expected_silent: bool = False,
+        unverified_contrary_claim: bool = False,
+        exit_target: str | None = None,
         active: bool = True,
     ) -> int:
         cur = self.conn.execute(
             "INSERT INTO sources (name,tier,endpoint,format,adapter_module,adapter_config,"
-            "identity_key,license_url,window_days,window_key_part,control_group,active,added_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "identity_key,license_url,window_days,window_key_part,control_group,timeout_s,cadence,"
+            "expected_silent,unverified_contrary_claim,exit_target,active,added_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 name,
                 tier,
@@ -206,6 +235,11 @@ class Database:
                 window_days,
                 window_key_part,
                 control_group,
+                timeout_s,
+                cadence,
+                int(expected_silent),
+                int(unverified_contrary_claim),
+                exit_target,
                 int(active),
                 iso(utcnow()),
             ),
@@ -217,11 +251,21 @@ class Database:
         """Latest row per source name wins (deactivation is a new row with active=0)."""
         rows = self.conn.execute(
             "SELECT s.id,s.name,s.tier,s.endpoint,s.format,s.adapter_module,s.adapter_config,"
-            " s.identity_key,s.license_url,s.window_days,s.window_key_part,s.control_group,s.active"
+            " s.identity_key,s.license_url,s.window_days,s.window_key_part,s.control_group,"
+            " s.timeout_s,s.cadence,s.expected_silent,s.unverified_contrary_claim,s.exit_target,s.active"
             " FROM sources s JOIN (SELECT name, MAX(id) AS mid FROM sources GROUP BY name) m"
             " ON s.id = m.mid ORDER BY s.id"
         ).fetchall()
-        out = [Source(*r[:12], active=bool(r[12])) for r in rows]  # type: ignore[misc]
+        out = [
+            Source(
+                *r[:14],  # type: ignore[misc]
+                expected_silent=bool(r[14]),
+                unverified_contrary_claim=bool(r[15]),
+                exit_target=r[16],
+                active=bool(r[17]),
+            )
+            for r in rows
+        ]
         return [s for s in out if s.active] if active_only else out
 
     def source_by_name(self, name: str) -> Source | None:
@@ -410,6 +454,33 @@ class Database:
             ids,
         ).fetchall()
         return {k for k, ev in rows if ev == "removed"}
+
+    def keys_in_snapshot(self, snapshot_id: int) -> set[str]:
+        rows = self.conn.execute("SELECT record_key FROM record_index WHERE snapshot_id=?", (snapshot_id,)).fetchall()
+        return {r[0] for r in rows}
+
+    def removed_keys_ever(self, source: Source) -> set[str]:
+        ids = self.source_lineage_ids(source)
+        q = ",".join("?" * len(ids))
+        rows = self.conn.execute(
+            f"SELECT DISTINCT record_key FROM key_events WHERE source_id IN ({q}) AND event='removed'", ids
+        ).fetchall()
+        return {r[0] for r in rows}
+
+    # ---- drift acceptances ---------------------------------------------
+    def accept_drift(self, source: Source, fingerprint: str, note: str | None = None) -> None:
+        self.conn.execute(
+            "INSERT INTO drift_acceptances (source_id,fingerprint,accepted_at,note) VALUES (?,?,?,?)",
+            (source.id, fingerprint, iso(utcnow()), note),
+        )
+
+    def accepted_fingerprints(self, source: Source) -> list[str]:
+        ids = self.source_lineage_ids(source)
+        q = ",".join("?" * len(ids))
+        rows = self.conn.execute(
+            f"SELECT fingerprint FROM drift_acceptances WHERE source_id IN ({q}) ORDER BY id", ids
+        ).fetchall()
+        return [r[0] for r in rows]
 
     def key_event_counts(self, source: Source) -> dict[str, int]:
         ids = self.source_lineage_ids(source)
