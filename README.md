@@ -99,6 +99,17 @@ Scheduling: `deploy/archive-harness.timer` (systemd, daily 06:00 UTC,
 `Persistent=true`) or `deploy/crontab.example`. Sources run sequentially; one
 request per host at a time; 30 s default timeout.
 
+Stateless runner (the 21-day observation run uses a daily scheduled Devin
+session): `deploy/run_daily.sh` keeps the DB and payloads in an S3-compatible
+bucket (Cloudflare R2). It pulls `harness.sqlite`, runs, `s3 sync`s payloads up
+(never deletes), uploads the DB both as the current pointer and as an immutable
+dated copy under `db-history/`, then verifies the prev_hash chain and payload
+retention against the bucket's own listing (`verify --manifest`). It refuses to
+start a new chain if the bucket has no DB unless `BOOTSTRAP=1`. Exit 0 = all
+sources ok, 1 = run completed with alerts, 2 = state could not be pulled or
+pushed (the day does not count). Env: `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT_URL`, `R2_BUCKET`.
+
 ## Adding a twenty-first source without modifying core code
 
 1. Append an entry to `sources.json`:

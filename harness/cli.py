@@ -21,7 +21,7 @@ from typing import Any
 from harness.db import Database
 from harness.report import findings, run_summary, source_table, verify_integrity
 from harness.runner import Runner
-from harness.storage import FilesystemPayloadStore
+from harness.storage import FilesystemPayloadStore, ManifestStore
 
 SOURCE_FIELDS = {
     "name",
@@ -88,7 +88,9 @@ def main(argv: list[str] | None = None) -> int:
     s_run = sub.add_parser("run")
     s_run.add_argument("--only", action="append", default=[])
     s_run.add_argument("--summary-file", default=None)
-    sub.add_parser("verify")
+    s_ver = sub.add_parser("verify")
+    s_ver.add_argument("--manifest", default=None, help="remote listing (aws s3 ls --recursive); existence only")
+    s_ver.add_argument("--manifest-prefix", default="payloads/")
     sub.add_parser("findings")
     sub.add_parser("sources")
     s_acc = sub.add_parser("accept-drift")
@@ -113,7 +115,10 @@ def main(argv: list[str] | None = None) -> int:
         print(source_table(db.sources(active_only=False)))
         return 0
     if a.cmd == "verify":
-        rep = verify_integrity(db, store)
+        if a.manifest:
+            rep = verify_integrity(db, ManifestStore.from_listing(a.manifest, a.manifest_prefix), verify_bytes=False)
+        else:
+            rep = verify_integrity(db, store)
         print(rep.as_text())
         return 0 if rep.ok else 1
     if a.cmd == "findings":
