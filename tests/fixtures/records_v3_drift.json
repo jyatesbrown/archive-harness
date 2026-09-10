@@ -1,0 +1,12 @@
+{
+  "meta": {"generated": "2026-09-03T00:00:00Z", "note": "v3: field 'color' renamed to 'colour' (structural drift)"},
+  "data": {
+    "items": [
+      {"id": "A-001", "created": "2026-08-30", "colour": "red", "qty": 1},
+      {"id": "A-003", "created": "2026-08-31", "colour": "green", "qty": 3},
+      {"id": "A-004", "created": "2026-08-31", "colour": "yellow", "qty": 4},
+      {"id": "A-005", "created": "2026-09-01", "colour": "black", "qty": 5},
+      {"id": "A-006", "created": "2026-09-02", "colour": "white", "qty": 6}
+    ]
+  }
+}

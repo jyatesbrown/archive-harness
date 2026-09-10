@@ -1,0 +1,13 @@
+[Unit]
+Description=archive-harness daily run
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=harness
+WorkingDirectory=/opt/archive-harness
+ExecStart=/usr/bin/python3 -m harness --db /var/lib/archive-harness/harness.sqlite --payloads /var/lib/archive-harness/payloads run --summary-file /var/lib/archive-harness/summaries/%i.txt
+# Non-zero exit means at least one source was not ok; the alert rows are in the DB
+# and the summary file lists them. OnFailure surfaces a run that did not complete.
+OnFailure=archive-harness-failed@%n.service

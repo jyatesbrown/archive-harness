@@ -1,0 +1,12 @@
+{
+  "meta": {"generated": "2026-09-02T00:00:00Z", "note": "v2: A-002 removed, A-004 mutated, A-006 added"},
+  "data": {
+    "items": [
+      {"id": "A-001", "created": "2026-08-30", "color": "red", "qty": 1},
+      {"id": "A-003", "created": "2026-08-31", "color": "green", "qty": 3},
+      {"id": "A-004", "created": "2026-08-31", "color": "yellow", "qty": 4},
+      {"id": "A-005", "created": "2026-09-01", "color": "black", "qty": 5},
+      {"id": "A-006", "created": "2026-09-02", "color": "white", "qty": 6}
+    ]
+  }
+}

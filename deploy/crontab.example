@@ -1,0 +1,3 @@
+# Alternative to the systemd timer. Runs daily at 06:00 UTC; the summary and any
+# alerts are appended to the log. A missing daily entry in the log is itself an alert.
+0 6 * * * cd /opt/archive-harness && /usr/bin/python3 -m harness --db /var/lib/archive-harness/harness.sqlite --payloads /var/lib/archive-harness/payloads run >> /var/log/archive-harness/run.log 2>&1 || echo "ALERT: archive-harness run exited $?" >> /var/log/archive-harness/run.log

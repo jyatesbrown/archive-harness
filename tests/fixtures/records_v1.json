@@ -1,0 +1,12 @@
+{
+  "meta": {"generated": "2026-09-01T00:00:00Z", "note": "throwaway fixture; values are meaningless"},
+  "data": {
+    "items": [
+      {"id": "A-001", "created": "2026-08-30", "color": "red", "qty": 1},
+      {"id": "A-002", "created": "2026-08-30", "color": "blue", "qty": 2},
+      {"id": "A-003", "created": "2026-08-31", "color": "green", "qty": 3},
+      {"id": "A-004", "created": "2026-08-31", "color": "green", "qty": 4},
+      {"id": "A-005", "created": "2026-09-01", "color": "black", "qty": 5}
+    ]
+  }
+}
